@@ -3,10 +3,10 @@ import binascii
 import datetime
 import hashlib
 import hmac
+import os
 import re
 
 import boto3
-import os
 import six
 
 from .exceptions import ForceChangePasswordException
@@ -173,6 +173,7 @@ class AWSSRP(object):
         return base64.standard_b64encode(hmac_obj.digest()).decode('utf-8')
 
     def process_challenge(self, challenge_parameters):
+        internal_username = challenge_parameters['USERNAME']
         user_id_for_srp = challenge_parameters['USER_ID_FOR_SRP']
         salt_hex = challenge_parameters['SALT']
         srp_b_hex = challenge_parameters['SRP_B']
@@ -188,13 +189,13 @@ class AWSSRP(object):
         hmac_obj = hmac.new(hkdf, msg, digestmod=hashlib.sha256)
         signature_string = base64.standard_b64encode(hmac_obj.digest())
         response = {'TIMESTAMP': timestamp,
-                    'USERNAME': user_id_for_srp,
+                    'USERNAME': internal_username,
                     'PASSWORD_CLAIM_SECRET_BLOCK': secret_block_b64,
                     'PASSWORD_CLAIM_SIGNATURE': signature_string.decode('utf-8')}
         if self.client_secret is not None:
             response.update({
                 "SECRET_HASH":
-                self.get_secret_hash(self.username, self.client_id, self.client_secret)})
+                self.get_secret_hash(internal_username, self.client_id, self.client_secret)})
         return response
 
     def authenticate_user(self, client=None):
@@ -233,12 +234,15 @@ class AWSSRP(object):
                 ClientId=self.client_id,
                 ChallengeName=self.PASSWORD_VERIFIER_CHALLENGE,
                 ChallengeResponses=challenge_response)
-
             if tokens['ChallengeName'] == self.NEW_PASSWORD_REQUIRED_CHALLENGE:
                 challenge_response = {
                     'USERNAME': auth_params['USERNAME'],
                     'NEW_PASSWORD': new_password
                 }
+
+                if self.client_secret is not None:
+                    challenge_response['SECRET_HASH'] = self.get_secret_hash(auth_params['USERNAME'], self.client_id, self.client_secret)
+
                 new_password_response = boto_client.respond_to_auth_challenge(
                     ClientId=self.client_id,
                     ChallengeName=self.NEW_PASSWORD_REQUIRED_CHALLENGE,
